@@ -104,3 +104,6 @@ _, predicted = torch.max(outputs, 1)
 plt.imshow(images[0].squeeze(), cmap='gray')
 plt.title(f"Prawda: {chr(labels[0] + 64)} | Predykcja: {chr(predicted[0] + 64)}")
 plt.show()
+
+torch.save(model.state_dict(), "model.pth")
+print("Model zapisany!")
