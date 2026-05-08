@@ -3,33 +3,58 @@ import numpy as np
 from PIL import Image
 import torch
 import torch.nn as nn
+import matplotlib.pyplot as plt
 
-from PyQt5.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QWidget, QPushButton, QLabel,
-    QVBoxLayout, QFileDialog
+    QVBoxLayout, QFileDialog, QHBoxLayout
 )
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt
+from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt
 
 
-# 🔹 MODEL (musi być identyczny jak w treningu)
-class LetterClassifier(nn.Module):
+# =====================================================
+# 1. ROZBUDOWANA ARCHITEKTURA (Musi być 1:1 jak w treningu)
+# =====================================================
+class AdvancedLetterCNN(nn.Module):
     def __init__(self):
         super().__init__()
+
         self.features = nn.Sequential(
-            nn.Conv2d(1, 32, 3, padding=1),
+            # Blok 1
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(32, 64, 3, padding=1),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(2, 2)
+            nn.MaxPool2d(2),
+            nn.Dropout2d(0.25),
+
+            # Blok 2
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Dropout2d(0.25),
+
+            # Blok 3
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2)
         )
+
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(64 * 7 * 7, 128),
+            nn.Linear(128 * 3 * 3, 512),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 27)
+            nn.BatchNorm1d(512),
+            nn.Dropout(0.5),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 26)  # 26 klas (A-Z)
         )
 
     def forward(self, x):
@@ -41,7 +66,7 @@ class LetterRecognizerApp(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Rozpoznawanie liter AI")
+        self.setWindowTitle("Rozpoznawanie liter AI - Advanced")
         self.setGeometry(100, 100, 400, 450)
 
         layout = QVBoxLayout()
@@ -68,12 +93,18 @@ class LetterRecognizerApp(QWidget):
         # 🔹 ŁADOWANIE MODELU
         self.device = torch.device("cpu")
 
-        self.model = LetterClassifier().to(self.device)
-        self.model.load_state_dict(torch.load("model.pth", map_location=self.device))
-        self.model.eval()
+        # Używamy nowej, rozbudowanej klasy
+        self.model = AdvancedLetterCNN().to(self.device)
+        try:
+            self.model.load_state_dict(torch.load("model.pth", map_location=self.device))
+            self.model.eval()
+            print("Model Advanced załadowany pomyślnie.")
+        except Exception as e:
+            print(f"Błąd ładowania: {e}")
+            self.result_label.setText("BŁĄD: model.pth nie pasuje do architektury!")
 
-        # EMNIST (indeks 1-26)
-        self.classes = ["?"] + list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        # EMNIST split='letters' to 26 klas (indeksy 0-25)
+        self.classes = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
     def load_image(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -95,38 +126,47 @@ class LetterRecognizerApp(QWidget):
         self.image_label.setPixmap(pixmap)
 
     def preprocess(self, path):
+        # 1. Wczytanie i konwersja na odcień szarości
         img = Image.open(path).convert('L')
-        img = img.resize((28, 28))
+
+        # 2. Skalowanie do 28x28 (LANCZOS pomaga zachować detale nóżki P)
+        img = img.resize((28, 28), Image.Resampling.LANCZOS)
 
         arr = np.array(img).astype(np.float32) / 255.0
 
-        # jeśli model się myli, odkomentuj:
-        arr = 1 - arr
+        # 3. Inwersja kolorów (model musi mieć białą literę na czarnym tle)
+        if arr.mean() > 0.5:
+            arr = 1.0 - arr
 
-        # normalizacja EMNIST
+        # --- USUŃ LUB ZAKOMENTUJ TE LINIE PONIŻEJ: ---
+        # arr = np.transpose(arr, (1, 0))
+        # arr = np.fliplr(arr)
+        # ---------------------------------------------
+
+        # 4. Normalizacja (identyczna jak w treningu)
         arr = (arr - 0.5) / 0.5
 
-        # transpose jak w treningu
-        arr = np.transpose(arr, (1, 0))
+        # Podgląd (zostaw go na chwilę, żeby sprawdzić czy teraz jest prosto)
+        import matplotlib.pyplot as plt
+        plt.imshow(arr, cmap='gray')
+        plt.title("Litera po transpozycji")
+        plt.show()
 
-        # PyTorch format
+        # 5. Formatowanie pod PyTorch
         arr = arr.reshape(1, 1, 28, 28)
-
-        return torch.tensor(arr)
+        return torch.tensor(arr.copy())
 
     def predict(self, arr):
         with torch.no_grad():
             arr = arr.to(self.device)
             outputs = self.model(arr)
-
             probs = torch.softmax(outputs, dim=1)
-
             return probs.cpu().numpy()[0]
 
     def show_results(self, probs):
         top_indices = np.argsort(probs)[::-1]
 
-        # TOP 1
+        # TOP 1 - Twoja oryginalna funkcja
         best_idx = top_indices[0]
         best_letter = self.classes[best_idx]
         best_conf = probs[best_idx] * 100
@@ -135,7 +175,7 @@ class LetterRecognizerApp(QWidget):
             f"Rozpoznana litera: {best_letter} ({best_conf:.2f}%)"
         )
 
-        # TOP 3
+        # TOP 3 - Twoja oryginalna funkcja
         top3_text = "Top 3:\n"
         for i in range(3):
             idx = top_indices[i]
